@@ -90,10 +90,7 @@ pipeline {
 
     post {
         always {
-            allure includeProperties:
-                     false,
-                     jdk: 'temurin21',
-                     results: [[path: 'allure-results']]
+            allure([includeProperties: false, jdk: '', results: [[path: 'allure-results']]])
             cleanWs()
         }
         failure {
