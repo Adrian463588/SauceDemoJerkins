@@ -58,8 +58,7 @@ jobs:
         with:
           browser: chrome
           install: true
-        env:
-          allure: true
+          command: npm run test:allure
         continue-on-error: true
 
       - name: Upload test results
