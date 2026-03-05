@@ -23,13 +23,11 @@ pipeline {
     }
 
     stages {
-
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
-        
         stage('Install Dependencies') {
             steps {
                 dir(env.WORKSPACE) { 
@@ -57,7 +55,6 @@ pipeline {
             steps {
                 // Eksekusi JS dan TSX normal (tanpa BDD) tetap dipertahankan
                 sh 'npx cypress run --headless'
-                
                 script {
                     if (isUnix()) {
                         sh 'npm run test:allure'
@@ -93,14 +90,17 @@ pipeline {
 
     post {
         always {
-            allure includeProperties: false, jdk: 'termurin21', results: [[path: 'allure-results']], testResults: '', source: '', report: 'allure-report'
+            allure includeProperties:
+                     false,
+                     jdk: 'temurin21',
+                     results: [[path: 'allure-results']]
             cleanWs()
-        } // Penambahan kurung kurawal tutup yang sebelumnya kurang
+        }
         failure {
-            echo 'Cypress test failed !'
+            echo '❌ Cypress tests failed!'
         }
         success {
-            echo 'cypress test passed !'
+            echo '✅ Cypress tests passed!'
         }
     }
 }
