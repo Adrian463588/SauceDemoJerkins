@@ -6,13 +6,11 @@ on:
   pull_request:
     branches: [main, master]
 
-# Cancel in-progress hanya di branch non-main/master
-# Hindari membatalkan deployment Pages yang sedang berjalan
+# cancel-in-progress FALSE di main/master agar deployment Pages tidak ter-cancel
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
 
-# Default minimal – diperluas hanya di job yang butuh
 permissions:
   contents: read
 
@@ -112,7 +110,6 @@ jobs:
 
       - name: Download test results
         uses: actions/download-artifact@v4
-        # FIX: continue jika artifact tidak ada (misal: test di-skip / artefak kosong)
         continue-on-error: true
         with:
           name: cypress-results
@@ -135,56 +132,61 @@ jobs:
   # ──────────────────────────────────────────────
   # Job 3: Generate Allure Report & Deploy ke GitHub Pages
   #
-  # FIX: Ganti actions/deploy-pages → peaceiris/actions-gh-pages
-  #      Alasan:
-  #        1. Mendukung Allure history (laporan kumulatif antar run)
-  #        2. Metode resmi dari dokumentasi Allure
-  #        3. Lebih stabil, tidak butuh GitHub Pages API token khusus
-  #        4. Source Pages cukup "Deploy from a branch" (lebih sederhana)
+  # FIX: Hapus simple-elf/allure-report-action (Docker broken)
+  #      Ganti dengan: install allure-commandline via npm
+  #      + manual history copy dari gh-pages branch
   # ──────────────────────────────────────────────
   generate-allure-report:
     runs-on: ubuntu-latest
     needs: cypress-run
-    # Tetap jalan walau test gagal, tapi HANYA di main/master
     if: >
       always() &&
       (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
     timeout-minutes: 15
-    # FIX: contents:write diperlukan agar peaceiris bisa push ke branch gh-pages
     permissions:
-      contents: write
+      contents: write  # diperlukan oleh peaceiris/actions-gh-pages
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Download allure-results dari Job 1
       - name: Download Allure results
         uses: actions/download-artifact@v4
         with:
           name: allure-results
           path: allure-results
 
-      # FIX: Load history dari branch gh-pages agar grafik tren antar-run tersimpan
-      # continue-on-error: true → aman untuk run pertama saat gh-pages belum ada
-      - name: Load Allure history from gh-pages
+      # Ambil history dari branch gh-pages untuk grafik tren antar-run
+      # continue-on-error: true → aman untuk run pertama (gh-pages belum ada)
+      - name: Get Allure history from gh-pages
         uses: actions/checkout@v4
-        if: always()
         continue-on-error: true
         with:
           ref: gh-pages
-          path: gh-pages
+          path: gh-pages-branch
 
-      # FIX: Gunakan simple-elf/allure-report-action untuk generate + preserve history
-      - name: Build Allure report with history
-        uses: simple-elf/allure-report-action@v1
-        if: always()
-        with:
-          allure_results: allure-results
-          gh_pages: gh-pages
-          allure_report: allure-report
-          allure_history: allure-history
-          keep_reports: 20  # Simpan 20 run terakhir
+      # Salin history ke allure-results agar allure CLI bisa membaca tren sebelumnya
+      # FIX: Ganti logika simple-elf dengan shell script murni — tidak butuh Docker
+      - name: Copy previous history into allure-results
+        run: |
+          if [ -d "gh-pages-branch/history" ]; then
+            echo "Found existing history, copying..."
+            cp -r gh-pages-branch/history allure-results/history
+          else
+            echo "No previous history found, first run."
+          fi
 
-      # Opsional: simpan juga sebagai artifact untuk di-download manual
+      # Install Allure CLI via npm (versi pinned untuk stabilitas)
+      - name: Install Allure CLI
+        run: |
+          npm install -g allure-commandline@2.32.0
+          allure --version
+
+      # Generate Allure report — output ke folder allure-report/
+      - name: Generate Allure report
+        run: allure generate allure-results --clean -o allure-report
+
+      # Simpan sebagai artifact (opsional, untuk download manual)
       - name: Upload Allure report artifact
         uses: actions/upload-artifact@v4
         if: always()
@@ -194,11 +196,14 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-      # FIX: Push allure-history ke branch gh-pages → trigger "pages build and deployment"
+      # Push allure-report ke branch gh-pages
+      # peaceiris menangani force-push agar tidak ada konflik history git
       - name: Deploy Allure report to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
-        if: always()
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_branch: gh-pages
-          publish_dir: allure-history
+          publish_dir: allure-report
+          # Tambahkan index.html redirect jika report berada di subfolder
+          enable_jekyll: false
+          force_orphan: false
