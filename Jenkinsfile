@@ -39,6 +39,9 @@ pipeline {
                         npm -v
                         npm ci 
 
+                        echo "=== install BDD Gherkin dependencies ==="
+                        npm install --save-dev @badeball/cypress-cucumber-preprocessor @bahmutov/cypress-esbuild-preprocessor esbuild
+
                         npx cypress install
                         npx cypress verify
 
