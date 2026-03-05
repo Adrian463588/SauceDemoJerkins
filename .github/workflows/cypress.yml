@@ -6,16 +6,20 @@ on:
   pull_request:
     branches: [main, master]
 
+# Batalkan run lama di branch yang sama agar tidak overlap
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default minimal — diperluas hanya di job yang butuh
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 jobs:
   # ──────────────────────────────────────────────
-  # Job 1: Install dependencies & cache
+  # Job 1: Run Cypress tests
   # ──────────────────────────────────────────────
-  install:
+  cypress-run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -24,48 +28,30 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
+          node-version: '20'   # Node 18 sudah EOL sejak April 2025
+          cache: 'npm'         # Otomatis cache npm registry cache antar run
 
       - name: Cache Cypress binary
         uses: actions/cache@v4
         with:
           path: ~/.cache/Cypress
           key: cypress-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            cypress-${{ runner.os }}-   # Fallback jika key exact tidak ada
 
-  # ──────────────────────────────────────────────
-  # Job 2: Run Cypress tests
-  # ──────────────────────────────────────────────
-  cypress-run:
-    runs-on: ubuntu-latest
-    needs: install
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: 'npm'
-
-      - name: Restore Cypress cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/Cypress
-          key: cypress-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        run: npm ci
 
       - name: Cypress run
         uses: cypress-io/github-action@v6
         with:
           browser: chrome
-          install: true
+          install: false  # FIX: sudah diinstall manual di atas, hindari double install
         env:
-          CYPRESS_allure: true
-        continue-on-error: true
+          CYPRESS_allure: true                        # FIX: harus pakai prefix CYPRESS_
+          CYPRESS_allureResultsDir: allure-results
+        # FIX: hapus continue-on-error — CI harus merah saat test gagal
+        #      job downstream pakai "if: always()" untuk tetap generate report
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -73,6 +59,7 @@ jobs:
         with:
           name: cypress-results
           path: cypress/results
+          retention-days: 7   # FIX: batasi penyimpanan artifact
           if-no-files-found: ignore
 
       - name: Upload screenshots on failure
@@ -81,6 +68,7 @@ jobs:
         with:
           name: cypress-screenshots
           path: cypress/screenshots
+          retention-days: 7
           if-no-files-found: ignore
 
       - name: Upload videos
@@ -89,18 +77,20 @@ jobs:
         with:
           name: cypress-videos
           path: cypress/videos
+          retention-days: 7
           if-no-files-found: ignore
-      
+
       - name: Upload Allure results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: allure-results
           path: allure-results
+          retention-days: 7
           if-no-files-found: ignore
 
   # ──────────────────────────────────────────────
-  # Job 3: Generate Mochawesome report
+  # Job 2: Generate Mochawesome report
   # ──────────────────────────────────────────────
   generate-report:
     runs-on: ubuntu-latest
@@ -113,7 +103,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
@@ -136,15 +126,25 @@ jobs:
         with:
           name: mochawesome-report
           path: cypress/reports
+          retention-days: 7
           if-no-files-found: ignore
 
   # ──────────────────────────────────────────────
-  # Job 4: Generate Allure Report & Deploy to GitHub Pages
+  # Job 3: Generate Allure Report & Deploy ke GitHub Pages
+  #         FIX: hanya jalan di branch main/master
   # ──────────────────────────────────────────────
   generate-allure-report:
     runs-on: ubuntu-latest
     needs: cypress-run
-    if: always()
+    # FIX: always() agar tetap jalan walau test gagal,
+    #      tapi batasi deploy hanya di main/master
+    if: >
+      always() &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: read
+      pages: write      # FIX: dipindah ke job level, bukan workflow level
+      id-token: write   # FIX: idem
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -155,7 +155,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
@@ -175,6 +175,7 @@ jobs:
         with:
           name: allure-report
           path: allure-report
+          retention-days: 14
           if-no-files-found: ignore
 
       - name: Setup Pages
